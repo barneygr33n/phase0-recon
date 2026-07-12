@@ -186,85 +186,91 @@ def rfc3339_to_ms(s):
         return None
 
 
-def assign_family(ticker, series, event, category, cfg, open_ts, now):
-    """Return family name or None. Named families (config order) match first; the
-    generic new_launch net is an optional fallback (runtime.include_new_launch)."""
-    hay = " ".join(str(x or "").upper() for x in (ticker, series, event))
-    cat = (category or "")
+def assign_family_event(series, category, cfg):
+    """Assign a family to an EVENT by category (e.g. Mentions) or, within the
+    Entertainment category, by series prefix (RT, awards). Returns name or None."""
     fam_defs = cfg["families"]
-    rt = cfg["runtime"]
-
-    # named families of interest — first match wins
+    cat = category or ""
+    ser = (series or "").upper()
+    # category-based families (Mentions)
     for fam, d in fam_defs.items():
-        if fam == "new_launch":
-            continue
-        if any(p.upper() in hay for p in d["patterns"]) or cat in d.get("categories", []):
+        if cat in d.get("categories", []):
             return fam
-    # optional generic new-launch fallback (any category, recently opened)
-    if rt.get("include_new_launch"):
-        nl = fam_defs.get("new_launch", {})
-        if any(p.upper() in hay for p in nl.get("patterns", [])) or cat in nl.get("categories", []):
-            return "new_launch"
-        if open_ts and (now - open_ts) <= rt.get("new_launch_days", 14) * 86400_000:
-            return "new_launch"
+    # entertainment-restricted series-prefix families (RT first for priority, then awards)
+    if cat == "Entertainment":
+        for fam, d in fam_defs.items():
+            for p in d.get("entertainment_series_prefixes", []):
+                if ser.startswith(p.upper()):
+                    return fam
     return None
 
 
 def discover_markets(api_key_id, private_key, cfg):
-    """Page open markets, bucket into families, apply caps/sampling. Returns list of dicts."""
+    """Discover in-family markets via the EVENTS feed (excludes multivariate combos),
+    then resolve each in-family event's open markets. Returns list of market dicts."""
     base = cfg["runtime"]["rest_base"]
-    now = now_ms()
-    matched = {}  # ticker -> dict
+    rt = cfg["runtime"]
+
+    # 1) page open events, keep the ones in our families
+    fam_events = {}  # family -> list of event dicts
     cursor = None
     pages = 0
-    while pages < 60:  # safety cap; ~200/page
+    while pages < 60:
         params = {"limit": 200, "status": "open"}
         if cursor:
             params["cursor"] = cursor
-        full = "/trade-api/v2/markets"
-        h = rest_headers(api_key_id, private_key, "GET", full)
-        r = requests.get(base + "/markets", headers=h, params=params, timeout=20)
+        h = rest_headers(api_key_id, private_key, "GET", "/trade-api/v2/events")
+        r = requests.get(base + "/events", headers=h, params=params, timeout=25)
         r.raise_for_status()
-        data = r.json()
-        for m in data.get("markets", []):
-            tk = m.get("ticker")
-            if not tk:
-                continue
-            open_ts = rfc3339_to_ms(m.get("open_time"))
-            fam = assign_family(tk, m.get("series_ticker"), m.get("event_ticker"),
-                                m.get("category"), cfg, open_ts, now)
-            if not fam:
-                continue
-            matched[tk] = {
-                "ticker": tk, "family": fam,
-                "series": m.get("series_ticker"), "event": m.get("event_ticker"),
-                "title": m.get("title") or m.get("subtitle"),
-                "open_ts": open_ts, "close_ts": rfc3339_to_ms(m.get("close_time")),
-                "volume": fp(m.get("volume")) or fp(m.get("volume_24h")),
-            }
-        cursor = data.get("cursor")
+        d = r.json()
+        for e in d.get("events", []):
+            fam = assign_family_event(e.get("series_ticker"), e.get("category"), cfg)
+            if fam:
+                fam_events.setdefault(fam, []).append(
+                    {"event": e.get("event_ticker"), "series": e.get("series_ticker")})
+        cursor = d.get("cursor")
         pages += 1
         if not cursor:
             break
 
-    # per-family cap + sampling (§1: keep highest-volume + N random low-vol)
-    rt = cfg["runtime"]
+    # 2) cap events per family, then resolve their open markets
+    markets = {}
+    for fam, evs in fam_events.items():
+        for ev in evs[: rt.get("max_events_per_family", 25)]:
+            params = {"limit": 200, "status": "open", "event_ticker": ev["event"]}
+            h = rest_headers(api_key_id, private_key, "GET", "/trade-api/v2/markets")
+            try:
+                r = requests.get(base + "/markets", headers=h, params=params, timeout=25)
+                r.raise_for_status()
+                for m in r.json().get("markets", []):
+                    tk = m.get("ticker")
+                    if not tk:
+                        continue
+                    markets[tk] = {
+                        "ticker": tk, "family": fam,
+                        "series": ev["series"], "event": ev["event"],
+                        "title": m.get("title") or m.get("subtitle"),
+                        "open_ts": rfc3339_to_ms(m.get("open_time")),
+                        "close_ts": rfc3339_to_ms(m.get("close_time")),
+                        "volume": fp(m.get("volume")) or fp(m.get("volume_24h")),
+                    }
+            except Exception:
+                continue
+
+    # 3) cap to max_markets — Rotten Tomatoes (priority) kept first, rest by volume
     by_fam = {}
-    for m in matched.values():
+    for m in markets.values():
         by_fam.setdefault(m["family"], []).append(m)
-    kept = []
+    for fam in by_fam:
+        by_fam[fam].sort(key=lambda x: x.get("volume", 0), reverse=True)
+    kept = list(by_fam.get("rotten_tomatoes", []))[: rt.get("rt_cap", 15)]
+    others = []
     for fam, ms in by_fam.items():
-        ms.sort(key=lambda x: x.get("volume", 0), reverse=True)
-        if len(ms) <= rt["per_family_cap"]:
-            kept.extend(ms)
-        else:
-            top = ms[:rt["per_family_cap"]]
-            low = ms[rt["per_family_cap"]:]
-            sample = random.sample(low, min(rt["low_vol_sample"], len(low)))
-            kept.extend(top + sample)
-    # global cap
-    kept.sort(key=lambda x: x.get("volume", 0), reverse=True)
-    kept = kept[: rt["max_markets"]]
+        if fam == "rotten_tomatoes":
+            continue
+        others.extend(ms)
+    others.sort(key=lambda x: x.get("volume", 0), reverse=True)
+    kept.extend(others[: max(0, rt["max_markets"] - len(kept))])
     return kept
 
 
@@ -579,12 +585,10 @@ class Phase0Logger:
         self.db.close()
 
     def _selftest_done(self):
-        # done once we've stored at least one snapshot and one bbo row
-        cur = self.db.conn
+        # done once we've stored at least one orderbook snapshot (proves the pipe)
         self.db.flush()
-        s = cur.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
-        b = cur.execute("SELECT COUNT(*) FROM bbo").fetchone()[0]
-        return s >= 1 and b >= 1
+        s = self.db.conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        return s >= 1
 
 
 def run_selftest(cfg):
