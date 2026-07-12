@@ -1,0 +1,42 @@
+# Phase 0 recon logger config
+# Edit family patterns after the FIRST discovery run prints what it actually found.
+# Ticker prefixes are matched case-insensitively against the market ticker AND its series/event ticker.
+# These are best-known guesses (2026-07); the logger prints every series it matched so they can be corrected.
+
+runtime:
+  db_path: "phase0_recon.db"
+  # WS endpoint (production). Legacy shared host also works:
+  #   wss://api.elections.kalshi.com/trade-api/ws/v2
+  ws_url: "wss://api.elections.kalshi.com/trade-api/ws/v2"
+  rest_base: "https://api.elections.kalshi.com/trade-api/v2"
+  ws_sign_path: "/trade-api/ws/v2"
+  max_markets: 40            # cap concurrent orderbook subscriptions (§1)
+  rediscover_every_min: 60   # re-scan open markets this often (adds/removes)
+  commit_every_s: 5          # SQLite commit cadence
+  coverage_ping_s: 300       # write a coverage_ping event this often (for §5.3 hour-of-day coverage)
+  low_vol_sample: 5          # if a family has > per_family_cap markets, keep top-volume + this many random low-vol
+  per_family_cap: 12         # soft cap per family before sampling kicks in
+  new_launch_days: 14        # (only used if include_new_launch: true) opened within this many days
+  include_new_launch: false  # generic cross-category "new launch" net. OFF — Ben quotes where he has a fair.
+                             # Flip to true to also scan any newly-opened market (illiquidity play, any category).
+
+# Families of interest (2026-07-12, refined with Ben). `patterns` = ticker/series prefixes;
+# `categories` = Kalshi category strings (matched if present). First match wins, so order matters.
+# Weather intentionally REMOVED (not of interest). Rotten Tomatoes is the priority family.
+families:
+  rotten_tomatoes:
+    # Priority. Laddered score-bucket markets — Ben's film-expertise ("Knowing Ball") edge.
+    patterns: ["KXRT", "KXROTTEN", "ROTTEN", "TOMATO", "RTSCORE", "KXCERTIFIED", "KXFRESH"]
+    categories: ["Entertainment", "Movies", "Rotten Tomatoes"]
+  awards:
+    # Culture/awards shows (Oscars, Emmys, Globes, Tonys, Grammys, critics prizes).
+    patterns: ["KXOSCAR", "KXEMMY", "KXGRAMMY", "KXTONY", "KXGLOBE", "KXGOLDENGLOBE", "KXCRITICS", "KXAWARD", "KXSAG", "KXBAFTA"]
+    categories: ["Awards", "Entertainment"]
+  mention:
+    patterns: ["KXMENTION", "MENTION", "KXMENTIONS", "KXSAY", "KXSPEECH"]
+    categories: ["Mentions", "Politics"]
+
+# Optional: to re-enable the generic new-launch scan (e.g. to catch World Cup or any fresh market),
+# set runtime.include_new_launch: true. When on, any market opened within new_launch_days that
+# doesn't match a family above is logged under the "new_launch" family.
+# Markets matching NO family are ignored.
