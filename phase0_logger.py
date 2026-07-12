@@ -322,6 +322,7 @@ class Phase0Logger:
         self.markets = {}        # ticker -> meta
         self.cmd_id = 0
         self.stop = False
+        self.selftest_ok = False
         self.last_commit = time.time()
         self.last_cov = 0
         self.last_rediscover = 0
@@ -496,8 +497,34 @@ class Phase0Logger:
                                                 "market_ticker": tk}})
                 await asyncio.sleep(0.02)
 
+    def _one_open_market(self):
+        """Fetch a single open market ticker (connectivity probe for --selftest)."""
+        base = self.cfg["runtime"]["rest_base"]
+        h = rest_headers(self.api_key_id, self.private_key, "GET", "/trade-api/v2/markets")
+        r = requests.get(base + "/markets", headers=h,
+                         params={"limit": 1, "status": "open"}, timeout=20)
+        r.raise_for_status()
+        ms = r.json().get("markets", [])
+        if not ms:
+            return None
+        m = ms[0]
+        return {"ticker": m.get("ticker"), "family": "_probe",
+                "series": m.get("series_ticker"), "event": m.get("event_ticker"),
+                "title": m.get("title"), "open_ts": None, "close_ts": None}
+
     async def run(self):
         await self.refresh_markets()
+        if self.selftest and not self.markets:
+            # family patterns matched nothing (possibly off-season / wrong prefixes).
+            # Prove the WS pipe still works against any open market.
+            try:
+                m = self._one_open_market()
+                if m and m["ticker"]:
+                    self.markets[m["ticker"]] = m
+                    print(f"[selftest] no in-family markets found; probing connectivity "
+                          f"with open market {m['ticker']}")
+            except Exception as e:
+                print(f"[selftest] probe-market fetch failed: {e}")
         if not self.markets:
             print("No markets matched any family. Check phase0_config.yaml patterns "
                   "against the discovery output, then rerun.")
@@ -524,6 +551,7 @@ class Phase0Logger:
                         self.handle_message(json.loads(raw))
                         await self.periodic(ws)
                         if self.selftest and self._selftest_done():
+                            self.selftest_ok = True
                             self.stop = True
                             break
                         if self.deadline and time.time() >= self.deadline:
@@ -531,7 +559,7 @@ class Phase0Logger:
                             self.stop = True
                             break
             except (websockets.ConnectionClosed, OSError) as e:
-                if self.stop:
+                if self.stop or self.selftest:
                     break
                 self.db.event("", "reconnect", str(e))
                 print(f"  … disconnected ({e}); reconnecting in {backoff}s")
@@ -570,9 +598,22 @@ def run_selftest(cfg):
         print(f"account/limits FAILED: {e}")
     lg = Phase0Logger(cfg, selftest=True)
     lg.db.event("", "session_start", "selftest")
+
+    async def _bounded():
+        # hard 60s backstop so the self-test can never hang
+        try:
+            await asyncio.wait_for(lg.run(), timeout=60)
+        except asyncio.TimeoutError:
+            lg.stop = True
+            print("WebSocket self-test timed out after 60s "
+                  "(no snapshot received — check family patterns / connectivity).")
+
     try:
-        asyncio.run(lg.run())
-        print("WebSocket snapshot capture OK — see phase0_recon.db")
+        asyncio.run(_bounded())
+        if lg.selftest_ok:
+            print("WebSocket snapshot capture OK — connectivity + auth confirmed.")
+        else:
+            print("WebSocket connected but no snapshot captured — see message above.")
     except Exception as e:
         print(f"WebSocket self-test FAILED: {e}")
 
