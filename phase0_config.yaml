@@ -23,12 +23,18 @@ runtime:
 #  - `categories`: match the whole Kalshi category (used for Mentions).
 #  - `entertainment_series_prefixes`: match series by prefix ONLY within the
 #     "Entertainment" category (keeps economics/sports lookalikes out).
+# `market_quota` guarantees each family a share of the max_markets budget
+# (highest-volume markets within each family are kept first, so dead far-dated
+# markets lose to active near-term ones). Leftover slots fill by volume across all.
 families:
   rotten_tomatoes:                       # PRIORITY — laddered movie-score buckets
+    market_quota: 15
     entertainment_series_prefixes: ["KXRT"]
   awards:                                # culture/awards shows (Oscar/Emmy/Grammy/…)
+    market_quota: 12
     entertainment_series_prefixes:
       ["KXOSCAR", "KXEMMY", "KXGRAM", "KXTONY", "KXGAMEAWARD", "KXESPY",
        "KXSAG", "KXGLOBE", "KXGOLDENGLOBE", "KXBAFTA", "KXCRITICS", "KXNAACP"]
   mention:                               # entire "Mentions" category
+    market_quota: 13
     categories: ["Mentions"]

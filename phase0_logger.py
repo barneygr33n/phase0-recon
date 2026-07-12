@@ -257,21 +257,24 @@ def discover_markets(api_key_id, private_key, cfg):
             except Exception:
                 continue
 
-    # 3) cap to max_markets — Rotten Tomatoes (priority) kept first, rest by volume
+    # 3) cap to max_markets with a per-family quota so no family is starved.
+    #    Within each family keep highest-volume markets first; leftover slots then
+    #    fill by volume across everything.
     by_fam = {}
     for m in markets.values():
         by_fam.setdefault(m["family"], []).append(m)
     for fam in by_fam:
         by_fam[fam].sort(key=lambda x: x.get("volume", 0), reverse=True)
-    kept = list(by_fam.get("rotten_tomatoes", []))[: rt.get("rt_cap", 15)]
-    others = []
+    fam_defs = cfg["families"]
+    default_q = rt.get("per_family_cap", 12)
+    kept, leftover = [], []
     for fam, ms in by_fam.items():
-        if fam == "rotten_tomatoes":
-            continue
-        others.extend(ms)
-    others.sort(key=lambda x: x.get("volume", 0), reverse=True)
-    kept.extend(others[: max(0, rt["max_markets"] - len(kept))])
-    return kept
+        q = fam_defs.get(fam, {}).get("market_quota", default_q)
+        kept.extend(ms[:q])
+        leftover.extend(ms[q:])
+    leftover.sort(key=lambda x: x.get("volume", 0), reverse=True)
+    kept.extend(leftover[: max(0, rt["max_markets"] - len(kept))])
+    return kept[: rt["max_markets"]]
 
 
 def get_account_limits(api_key_id, private_key, cfg):
