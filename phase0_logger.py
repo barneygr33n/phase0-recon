@@ -387,8 +387,23 @@ class Phase0Logger:
         sid = self.ticker_to_sid.get(ticker)
         if sid is None:
             return
-        await self.send(ws, {"id": self.next_id(), "cmd": "update_subscription",
-                             "params": {"sids": [sid], "action": "get_snapshot"}})
+        # Gap recovery: Kalshi rejects update_subscription/get_snapshot with
+        # code 14 "Market Ticker required", so re-baseline by unsubscribing the
+        # sid and re-subscribing by market_ticker, which triggers a fresh
+        # orderbook_snapshot (the same path subscribe_all uses successfully).
+        await self.send(ws, {"id": self.next_id(), "cmd": "unsubscribe",
+                             "params": {"sids": [sid]}})
+        self.sid_to_ticker.pop(sid, None)
+        self.ticker_to_sid.pop(ticker, None)
+        bk = self.books.get(ticker)
+        if bk is not None:
+            bk.last_seq = None
+        cid = self.next_id()
+        self._pending_sub = getattr(self, "_pending_sub", {})
+        self._pending_sub[cid] = ticker
+        await self.send(ws, {"id": cid, "cmd": "subscribe",
+                             "params": {"channels": ["orderbook_delta"],
+                                        "market_ticker": ticker}})
 
     def handle_message(self, data):
         t = data.get("type")
