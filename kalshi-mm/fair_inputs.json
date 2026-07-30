@@ -1,0 +1,41 @@
+{
+  "_note": "Per-film fair inputs — the SINGLE SOURCE OF TRUTH for the fair-value module. Ben edits this before a session, then runs `python3 fair_preview.py` to validate it and see the resulting ladder before quoting. Distribution = weighted mixture of normals, truncated to [floor, ceiling]. Own fills NEVER get edited back into these numbers (spec §1.5: updating belief on your own fills invites adverse selection).",
+  "_schema": {
+    "mixture": "list of {weight, mu, sigma, label}; weights need not sum to 1 (renormalized). mu/sigma in Tomatometer points.",
+    "floor/ceiling": "truncation bounds (RT score is 0-100).",
+    "reveal_datetime_utc": "ISO8601 or null. When known, the runner hard-pulls all quotes reveal_pull_lead_min before this.",
+    "reveal_pull_lead_min": "minutes before reveal to pull everything and stand down.",
+    "active": "only active:true films are loaded for quoting/preview."
+  },
+  "films": {
+    "KXRT-AVE": {
+      "title": "Avengers: Doomsday",
+      "note": "TEST CASE / PLUMBING ONLY — this fair is throwaway scaffolding to exercise the machine, not a conviction read. Do not treat the AVE ladder or its edges as a real signal.",
+      "fair_version": "2026-07-26",
+      "mixture": [
+        {"weight": 0.5, "mu": 79.4, "sigma": 10.0, "label": "with-Thor"},
+        {"weight": 0.5, "mu": 83.5, "sigma": 4.45, "label": "no-Thor"}
+      ],
+      "floor": 0,
+      "ceiling": 100,
+      "reveal_datetime_utc": null,
+      "reveal_pull_lead_min": 60,
+      "active": true,
+      "is_stress_harness": false
+    },
+    "KXRT-SPI": {
+      "title": "Spider-Man: Brand New Day (STRESS HARNESS — shadow only)",
+      "note": "THROUGHPUT/SAFETY STRESS TEST ONLY. Heavy near-reveal flow (566k 24h vol, confirmed 2026-07-30) used to exercise fill-sim, pull-on-gap, and the reveal-guard/defensive-pull through the real Aug-3 score drop. EV is DISCARDED (is_stress_harness). The mixture below is NOT a read — it is anchored to the market-implied distribution (book prices a ~90-91 score) so the engine quotes two-sided where the volume is and gets flooded. Reveal 2026-08-03 14:00 UTC confirmed via scan_rt.py.",
+      "fair_version": "market-anchored-2026-07-30",
+      "mixture": [
+        {"weight": 1.0, "mu": 90.4, "sigma": 1.15, "label": "market-anchored-placeholder"}
+      ],
+      "floor": 0,
+      "ceiling": 100,
+      "reveal_datetime_utc": "2026-08-03T14:00:00Z",
+      "reveal_pull_lead_min": 90,
+      "active": true,
+      "is_stress_harness": true
+    }
+  }
+}

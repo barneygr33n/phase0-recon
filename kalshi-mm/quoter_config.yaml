@@ -1,0 +1,60 @@
+# quoter_config.yaml — single source of every ⚙ parameter (design spec §7).
+# Every parameter change = a NEW datestamped comment line so drift is auditable
+# when we judge edge later.
+#
+# v1 seeded 2026-07-27 from KALSHI_MM_PHASE1_SCOPE.md §4 (the RT numbers we trust)
+# and KALSHI_MM_QUOTER_DESIGN_SPEC.md. Tune from Phase 1 data — never hard-code.
+
+runtime:
+  rest_base: "https://api.elections.kalshi.com/trade-api/v2"
+  sign_prefix: "/trade-api/v2"
+  ws_url: "wss://api.elections.kalshi.com/trade-api/ws/v2"
+  ws_sign_path: "/trade-api/ws/v2"
+  # mode gate. Session 1 = shadow (ZERO orders). Do not change without a session plan.
+  #   shadow    — compute would-be quotes, place nothing (spec §5 mode 1)
+  #   live_min  — quote_size 1–5, one film (spec §5 mode 2)   [NOT this session]
+  #   live_std  — config defaults                              [NOT this session]
+  mode: "shadow"
+
+# ── Per-family quoting params ────────────────────────────────────────────────
+families:
+  rotten_tomatoes:
+    dist_shape: "truncnorm"    # ⚙ rt_dist_shape — truncated-normal on [0,100] for v1; beta = v1.5
+    hw_base: 3.0               # ¢  half-width base ≈ 2× RT median half-spread (median spread ≈ 4.4¢)
+    hw_min: 1.4               # ¢  maker_fee + 1¢ (never quote tighter than fees + 1¢)
+    sigma_baseline: 0.9        # ¢/min  RT max_1min_move_p95 (very calm)
+    reprice_frac: 0.4          # cancel/replace when |center drift| > reprice_frac × hw
+    queue_keep_depth: 20       # contracts ahead: keep front-of-queue if mispricing < 1.5¢
+    quote_size: 1              # shadow/early live; 10 = live_std standard
+    max_strikes: 3             # max simultaneous strikes quoted per film
+    min_edge_cents: 1.0        # ⚙ tune — post a side only where post-fee edge clears this
+    maker_fee_c: 0.4           # ¢  RT typical maker fee per contract
+    # defensive-pull triggers (spec §2.4 v1)
+    sigma_pull_mult: 3.0       # pull all if σ_60s > this × sigma_baseline
+    vol_pull_mult: 5.0         # pull all if 60s trade volume > this × (Phase0 hourly rate / 60)
+    cooldown_s: 300            # stand-down after a defensive pull; re-enter only on operator key
+
+# ── Risk manager hard limits (spec §3.1) ─────────────────────────────────────
+risk:
+  max_inv_market: 25           # contracts, net per market
+  max_inv_total: 150           # $ absolute cost basis across all markets
+  max_session_loss: 40         # $ marked-to-mid → full stop, no override
+  session_max_min: 150         # quotes auto-cancel at window end
+  lambda_skew: 1.0             # inventory skew λ (spec §3.2)
+
+# ── Guards ───────────────────────────────────────────────────────────────────
+# ── Live shadow session (Sessions 2-3) ───────────────────────────────────────
+session:
+  fill_log: "fills_shadow.csv"   # §4 fill logger output (source=kalshi_mm, separate ledger)
+  tick_s: 1.0                    # recompute quotes / drain trades at most this often
+  status_every_s: 60            # print a heartbeat this often
+  # Films to run. AVE = real (thin) learning data; stress films = throughput/safety test
+  # only (EV discarded). Set active:true + is_stress_harness in fair_inputs.json too.
+  films: ["KXRT-AVE", "KXRT-SPI"]   # AVE = real (thin); KXRT-SPI = Spider-Man stress harness (reveal 2026-08-03 14:00 UTC)
+
+guards:
+  close_guard_min: 30          # don't quote markets < 30 min from close
+  stale_feed_s: 30             # watchdog: stale heartbeat threshold → cancel-all
+  # RT resolves AT reveal, not by a clean close → close guard alone is not enough.
+  # reveal_pull_lead_min is set PER FILM in fair_inputs.json; pull all quotes that
+  # many minutes before the scheduled Tomatometer drop and stand down through it.

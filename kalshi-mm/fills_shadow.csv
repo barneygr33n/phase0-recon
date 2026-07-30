@@ -1,0 +1,1 @@
+ts_ms,session_id,source,is_stress_harness,ticker,family,strike,maker_side,price,count,order_id,fair_at_fill,fair_mode,mid_at_fill,spread_at_fill,hw_at_fill,skew_at_fill,inv_before,inv_after,sigma_60s,trades_prev_60s,mid_move_prev_60s,queue_depth_ahead_at_place,seconds_resting,trade_price,taker_side,markout_1m,markout_5m,markout_15m,operator_note
